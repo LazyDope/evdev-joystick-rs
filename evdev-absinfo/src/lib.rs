@@ -18,34 +18,64 @@ pub struct AbsInfo {
 }
 
 impl AbsInfo {
-    fn set_absinfo(self, file: &mut File) -> Result<(), Error> {
+    pub fn set_absinfo(self, file: &mut File) -> Result<(), Error> {
         let fd = file.as_raw_fd();
-        let int_result = unsafe { libc::ioctl(fd, raw::evioc_set_abs(self.axis), &self.inner) };
+        check_valid_axis(fd, self.axis)?;
+        let int_result =
+            unsafe { libc::ioctl(fd, raw::evioc_set_abs(self.axis), &raw const self.inner) };
         Errno::result(int_result)?;
         Ok(())
     }
 
-    fn get_absinfo(file: &File, axis_index: u16) -> Result<Self, Error> {
+    pub fn get_absinfo(file: &File, axis_index: u16) -> Result<Self, Error> {
+        if axis_index > ABS_MAX {
+            return Err(Error::UnboundAxis(axis_index));
+        }
         let fd = file.as_raw_fd();
         check_valid_axis(fd, axis_index)?;
-        let mut abs_info: MaybeUninit<CAbsInfo> = MaybeUninit::uninit();
-        let int_result = unsafe { libc::ioctl(fd, raw::evioc_get_abs(axis_index), &mut abs_info) };
+        let mut abs_info: MaybeUninit<CAbsInfo> = MaybeUninit::zeroed();
+        let int_result =
+            unsafe { libc::ioctl(fd, raw::evioc_get_abs(axis_index), abs_info.as_mut_ptr()) };
         Errno::result(int_result)?;
         Ok(AbsInfo {
             axis: axis_index,
             inner: unsafe { abs_info.assume_init() },
         })
     }
+
+    pub fn get_normalized_value(&self) -> i16 {
+        let &AbsInfo {
+            inner:
+                CAbsInfo {
+                    value,
+                    minimum,
+                    maximum,
+                    flat,
+                    ..
+                },
+            ..
+        } = self;
+        const I16_RANGE: i64 = u16::MAX as i64;
+        let value = i64::from(value.max(minimum).min(maximum));
+        let range_size = i64::from(maximum) - i64::from(minimum);
+        let translation = i64::from(i16::MIN) - i64::from(minimum);
+        let norm_value = i16::try_from(value * I16_RANGE / range_size + translation)
+            .expect("This value should always be within i16 range");
+        apply_flatness(norm_value, flat)
+    }
+}
+
+fn apply_flatness(value: i16, flat: i32) -> i16 {
+    if (value as i32) >= (-flat).div_euclid(2) && (value as i32) <= flat.div_euclid(2) {
+        0
+    } else {
+        value
+    }
 }
 
 fn check_valid_axis(fd: RawFd, axis_index: u16) -> Result<(), Error> {
-    // Check axis is within range
-    if axis_index > ABS_MAX {
-        return Err(Error::UnboundAxis(axis_index));
-    }
-
     // Check axis is an abs axis
-    let mut abs_bitmask: MaybeUninit<AbsBitMask> = MaybeUninit::uninit();
+    let mut abs_bitmask: MaybeUninit<AbsBitMask> = MaybeUninit::zeroed();
     unsafe { raw::evioc_get_abs_bit(fd, abs_bitmask.as_mut_ptr()) }?;
     let abs_bitmask = unsafe { abs_bitmask.assume_init() };
     if !test_axis(axis_index, &abs_bitmask) {
@@ -71,6 +101,7 @@ enum Error {
 
 impl Display for AbsInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let norm = self.get_normalized_value();
         let &AbsInfo {
             axis,
             inner:
@@ -86,8 +117,8 @@ impl Display for AbsInfo {
         let flat_percent = f64::from(flat) / f64::from(maximum - minimum) * 100.;
         write!(
             f,
-            "Absolute axis {0:#x} ({0}) (value: {1}, min: {2}, max: {3}, flatness: {4} (={5:.2}%), fuzz: {6})",
-            axis, value, minimum, maximum, flat, flat_percent, fuzz
+            "Absolute axis {0:#x} ({0}) (value: {1} (norm: {7}), min: {2}, max: {3}, flatness: {4} (={5:.2}%), fuzz: {6})",
+            axis, value, minimum, maximum, flat, flat_percent, fuzz, norm
         )
     }
 }
