@@ -15,7 +15,8 @@ impl AbsInfo {
     fn set_absinfo(self, file: &mut File) -> Result<(), Error> {
         let fd = file.as_raw_fd();
         let int_result = unsafe { libc::ioctl(fd, raw::evioc_set_abs(self.axis), &self.inner) };
-        Errno::result(int_result).map(|_| ()).map_err(|e| e.into())
+        Errno::result(int_result)?;
+        Ok(())
     }
 
     fn get_absinfo(file: &File, axis_index: u16) -> Result<Self, Error> {
