@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "evdev-absinfo",
+]
+resolver = "2"
