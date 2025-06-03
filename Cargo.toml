@@ -1,5 +1,6 @@
 [workspace]
 members = [
-    "evdev-absinfo",
+    "evdev-joystick",
+    "evdev-joystick-cli",
 ]
 resolver = "2"
